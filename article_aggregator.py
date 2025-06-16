@@ -165,12 +165,9 @@ Summary:"""
         except Exception as e:
             print(f"HF Chat model error: {e}")
         
-    def try_groq_free(self, content, title):
-        """Try Groq free API with enhanced prompt"""
-        try:
-            groq_key = os.getenv('GROQ_API_KEY')
-            if not groq_key:
-        def get_custom_prompt(self, prompt_style="product_manager"):
+        return None
+    
+    def get_custom_prompt(self, prompt_style="product_manager"):
         """Get different prompt styles for summaries"""
         prompts = {
             "product_manager": """You are an expert product manager and business analyst. Create executive summaries that highlight:
@@ -207,6 +204,13 @@ Be specific and use numbers when available."""
         }
         
         return prompts.get(prompt_style, prompts["product_manager"])
+    
+    def try_groq_free(self, content, title):
+        """Try Groq free API with enhanced prompt"""
+        try:
+            groq_key = os.getenv('GROQ_API_KEY')
+            if not groq_key:
+                return None
             
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {
