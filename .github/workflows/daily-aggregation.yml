@@ -29,5 +29,6 @@ jobs:
         NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
         NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
         HUGGINGFACE_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       run: |
         python article_aggregator.py
