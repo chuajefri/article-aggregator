@@ -53,316 +53,326 @@ class ArticleAggregator:
             return []
     
     def scrape_article_content(self, url):
-        """Extract main content from article URL with better parsing"""
-        try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
-            response = requests.get(url, timeout=15, headers=headers)
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Remove unwanted elements
-            for element in soup(['script', 'style', 'nav', 'header', 'footer', 'sidebar', 'advertisement', 'ads']):
-                element.decompose()
-            
-            # Try multiple selectors to find main content
-            content_selectors = [
-                'article',
-                '[role="main"]',
-                '.post-content',
-                '.entry-content', 
-                '.article-content',
-                '.content',
-                '.post-body',
-                '.story-body',
-                'main',
-                '.main-content'
-            ]
-            
-            content = ""
-            for selector in content_selectors:
-                elements = soup.select(selector)
-                if elements:
-                    # Get the largest element (likely the main content)
-                    main_element = max(elements, key=lambda x: len(x.get_text()))
-                    content = main_element.get_text()
-                    break
-            
-            # Fallback to body if no specific content found
-            if not content:
-                content = soup.get_text()
-            
-            # Clean up the text
-            lines = (line.strip() for line in content.splitlines())
-            paragraphs = (line for line in lines if line and len(line) > 20)  # Filter short lines
-            clean_content = '\n'.join(paragraphs)
-            
-            # Return first 4000 characters for better context
-            return clean_content[:4000] if clean_content else ""
-            
-        except Exception as e:
-            print(f"Error scraping {url}: {e}")
-            return ""
-    
-    def generate_summary_free(self, content, title):
-        """Generate summary using free AI service with custom prompt"""
-        try:
-            # Try Method 1: Groq (fastest, great free tier)
-            summary = self.try_groq_free(content, title)
-            if summary:
-                return summary
-            
-            # Try Method 2: OpenAI Free Tier (if available)
-            summary = self.try_openai_free(content, title)
-            if summary:
-                return summary
-            
-            # Try Method 3: Hugging Face Chat Model (supports prompts)
-            summary = self.try_hf_chat_model(content, title)
-            if summary:
-                return summary
-                
-        except Exception as e:
-            print(f"Error generating summary: {e}")
-            
-        # Fallback: simple extraction
-        return self.simple_summary(content, title)
-    
-    def try_hf_chat_model(self, content, title):
-        """Try using HuggingFace chat model that supports prompts"""
-        try:
-            # Using a smaller chat model that's free and supports prompts
-            API_URL = "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium"
-            headers = {"Authorization": f"Bearer {self.hf_token}"}
-            
-            prompt = f"""As an expert product manager, read through the article and summarize the article in 3 or 4 bullet points, highlighting key data points if any.
-
-Article Title: {title}
-
-Article Content: {content[:800]}
-
-Summary:"""
-            
-            payload = {
-                "inputs": prompt,
-                "parameters": {
-                    "max_new_tokens": 200,
-                    "temperature": 0.7,
-                    "return_full_text": False
-                }
-            }
-            
-            response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
-            
-            if response.status_code == 200:
-                result = response.json()
-                if isinstance(result, list) and result:
-                    generated_text = result[0].get('generated_text', '')
-                    return self.clean_and_format_summary(generated_text)
-            else:
-                print(f"HF Chat API Error: {response.status_code}")
-            
-        except Exception as e:
-            print(f"HF Chat model error: {e}")
-        
-        return None
-    
-    def get_custom_prompt(self, prompt_style="product_manager"):
-        """Get different prompt styles for summaries"""
-        prompts = {
-            "product_manager": """You are an expert product manager and business analyst. Create executive summaries that highlight:
-1. Key business metrics, numbers, and data points (revenue, users, growth %, etc.)
-2. Strategic decisions and their business impact  
-3. Market trends and competitive advantages
-4. Technology breakthroughs with quantifiable benefits
-
-Format as exactly 3-4 bullet points, each 15-25 words, starting with the most important number or insight.""",
-
-            "investor": """You are a venture capital analyst. Focus on:
-1. Market size and growth opportunities
-2. Competitive positioning and moats
-3. Revenue models and unit economics  
-4. Risk factors and regulatory concerns
-
-Format as 3-4 bullet points highlighting investment implications.""",
-
-            "tech_executive": """You are a CTO analyzing technical developments. Focus on:
-1. Technical innovations and their business impact
-2. Performance improvements with specific metrics
-3. Architecture decisions and scalability implications
-4. Security, compliance, and operational considerations
-
-Format as 3-4 bullet points with technical depth and business context.""",
-
-            "simple": """Summarize this article in 3-4 clear bullet points that anyone can understand. Focus on:
-1. What happened (the main news)
-2. Why it matters (the impact)
-3. Key numbers or facts
-4. What happens next (if mentioned)
-
-Be specific and use numbers when available."""
+    """Extract main content from article URL with better parsing"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
         }
         
-        return prompts.get(prompt_style, prompts["product_manager"])
-    
-    def try_groq_free(self, content, title):
-        """Try Groq free API with enhanced prompt"""
-        try:
-            groq_key = os.getenv('GROQ_API_KEY')
-            if not groq_key:
-                return None
+        response = requests.get(url, timeout=20, headers=headers)
+        response.raise_for_status()  # Raise exception for bad status codes
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Remove unwanted elements more comprehensively
+        unwanted_selectors = [
+            'script', 'style', 'nav', 'header', 'footer', 'sidebar', 
+            'advertisement', 'ads', '.ad', '.advertisement', '.sidebar',
+            '.related-posts', '.comments', '.social-share', '.newsletter',
+            '.popup', '.modal', '.cookie-notice', '.breadcrumb', '.tags',
+            '.author-bio', '.post-meta', '.share-buttons', '[role="complementary"]'
+        ]
+        
+        for selector in unwanted_selectors:
+            for element in soup.select(selector):
+                element.decompose()
+        
+        # Try multiple content selectors in order of preference
+        content_selectors = [
+            # MedCity News specific
+            '.entry-content',
+            '.post-content', 
+            '.article-content',
+            '.content-area .content',
             
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {groq_key}",
-                "Content-Type": "application/json"
-            }
+            # General article selectors
+            'article .content',
+            'article',
+            '[role="main"]',
+            '.main-content',
+            '.post-body',
+            '.story-body',
+            'main',
+            '.content',
             
-            # Enhanced prompt with specific instructions
-            system_prompt = """You are an expert product manager and business analyst. Your job is to read articles and create executive summaries that highlight:
+            # Fallback selectors
+            '#content',
+            '.page-content',
+            '.single-content'
+        ]
+        
+        content = ""
+        content_element = None
+        
+        for selector in content_selectors:
+            elements = soup.select(selector)
+            if elements:
+                # Get the element with the most text content
+                content_element = max(elements, key=lambda x: len(x.get_text().strip()))
+                raw_content = content_element.get_text()
+                
+                # Only use if it has substantial content
+                if len(raw_content.strip()) > 200:
+                    content = raw_content
+                    print(f"Content found using selector: {selector} (length: {len(content)})")
+                    break
+        
+        # Fallback: try to get content from paragraphs
+        if not content or len(content.strip()) < 200:
+            paragraphs = soup.find_all('p')
+            if paragraphs:
+                content = '\n'.join([p.get_text().strip() for p in paragraphs if len(p.get_text().strip()) > 30])
+                print(f"Content found using paragraphs fallback (length: {len(content)})")
+        
+        # Final fallback to body content
+        if not content or len(content.strip()) < 200:
+            content = soup.get_text()
+            print(f"Using body fallback (length: {len(content)})")
+        
+        if not content:
+            print(f"No content found for {url}")
+            return ""
+        
+        # Clean up the text more thoroughly
+        lines = []
+        for line in content.splitlines():
+            line = line.strip()
+            # Filter out very short lines, navigation items, and common website elements
+            if (len(line) > 15 and 
+                not line.lower().startswith(('menu', 'search', 'subscribe', 'newsletter', 'follow us', 'share')) and
+                not line.isdigit() and 
+                '©' not in line):
+                lines.append(line)
+        
+        clean_content = '\n'.join(lines)
+        
+        # Return more content for better AI processing (increase from 4000 to 6000)
+        final_content = clean_content[:6000] if clean_content else ""
+        print(f"Final content length for {url}: {len(final_content)}")
+        
+        return final_content
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Request error scraping {url}: {e}")
+        return ""
+    except Exception as e:
+        print(f"Error scraping {url}: {e}")
+        return ""
 
-1. Key business metrics, numbers, and data points (revenue, users, growth %, etc.)
-2. Strategic decisions and their business impact
-3. Market trends and competitive advantages
-4. Technology breakthroughs with quantifiable benefits
+def try_groq_free(self, content, title):
+    """Try Groq free API with enhanced prompt"""
+    try:
+        groq_key = os.getenv('GROQ_API_KEY')
+        if not groq_key:
+            print("No GROQ API key found")
+            return None
+        
+        # Early validation of content
+        if not content or len(content.strip()) < 100:
+            print(f"Content too short for GROQ processing: {len(content) if content else 0} characters")
+            return None
+        
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {groq_key}",
+            "Content-Type": "application/json"
+        }
+        
+        # Enhanced system prompt with clearer instructions
+        system_prompt = """You are an expert healthcare and technology business analyst. Your job is to read articles and create executive summaries that highlight:
 
-Format your response as exactly 3-4 bullet points. Each bullet should:
-- Start with the most important insight or number
-- Be specific and quantifiable when possible
-- Focus on business impact, not just features
-- Be concise but informative (15-25 words per bullet)
+1. Key business metrics, numbers, and data points (revenue, funding, user numbers, growth %, market size, etc.)
+2. Strategic business decisions and their impact on the market or patients
+3. Technology innovations and their practical applications
+4. Market trends, competitive positioning, and regulatory developments
 
-Example format:
-• Revenue increased 47% to $2.1B driven by enterprise AI adoption among Fortune 500 companies
-• New feature reduces customer churn by 23% through predictive analytics, saving $45M annually
-• Strategic partnership with Microsoft expands market reach to 150M potential enterprise users"""
+FORMATTING RULES:
+- Create exactly 3-4 bullet points
+- Each bullet point should be 20-35 words
+- Start each bullet with the most important number, company name, or key insight
+- Focus on business impact and quantifiable outcomes
+- Use active voice and specific details
+- Avoid generic statements
 
-            payload = {
-                "model": "mixtral-8x7b-32768",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {
-                        "role": "user", 
-                        "content": f"""Analyze this article and create a 3-4 bullet executive summary focusing on key business insights and data points:
+EXAMPLE FORMAT:
+• DUOS raised $30M Series A to serve Medicare Advantage plans, targeting 82M older adults by 2050
+• Partnership with Humana expands veteran senior support services through automated SNAP-EBT application processing
+• Technology automates health-related social needs coverage, reducing care navigation complexity for aging population"""
+
+        # Truncate content strategically - keep beginning and key sections
+        content_preview = content[:4000]  # Increased from 3000
+        
+        payload = {
+            "model": "mixtral-8x7b-32768",  # Using the larger context model
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user", 
+                    "content": f"""Analyze this healthcare/technology article and create a 3-4 bullet executive summary focusing on key business insights, funding, partnerships, and quantifiable impact:
 
 TITLE: {title}
 
 ARTICLE CONTENT:
-{content[:3000]}
+{content_preview}
 
-Executive Summary:"""
-                    }
-                ],
-                "max_tokens": 300,
-                "temperature": 0.1,  # Lower for more consistent output
-                "top_p": 0.9
-            }
-            
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
-            
-            if response.status_code == 200:
-                result = response.json()
-                summary = result['choices'][0]['message']['content']
-                return self.clean_and_format_summary(summary)
-            else:
-                print(f"Groq API Error: {response.status_code} - {response.text}")
-            
-        except Exception as e:
-            print(f"Groq API error: {e}")
+Create an executive summary with 3-4 bullet points highlighting the most important business and technology insights:"""
+                }
+            ],
+            "max_tokens": 400,  # Increased token limit
+            "temperature": 0.2,  # Even lower for more consistent, factual output
+            "top_p": 0.95
+        }
         
-        return None
-    
-    def try_openai_free(self, content, title):
-        """Try OpenAI free tier if available"""
-        try:
-            openai_key = os.getenv('OPENAI_API_KEY')  # Optional
-            if not openai_key:
-                return None
-            
-            url = "https://api.openai.com/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {openai_key}",
-                "Content-Type": "application/json"
-            }
-            
-            payload = {
-                "model": "gpt-3.5-turbo",
-                "messages": [
-                    {
-                        "role": "system", 
-                        "content": "You are an expert product manager. Summarize articles in exactly 3-4 bullet points, highlighting key data points."
-                    },
-                    {
-                        "role": "user", 
-                        "content": f"Article Title: {title}\n\nContent: {content[:1500]}\n\nProvide a 3-4 bullet point summary:"
-                    }
-                ],
-                "max_tokens": 200,
-                "temperature": 0.3
-            }
-            
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
-            
-            if response.status_code == 200:
-                result = response.json()
-                summary = result['choices'][0]['message']['content']
-                return self.clean_and_format_summary(summary)
-            
-        except Exception as e:
-            print(f"OpenAI API error: {e}")
+        response = requests.post(url, headers=headers, json=payload, timeout=45)
         
-        return None
+        if response.status_code == 200:
+            result = response.json()
+            summary = result['choices'][0]['message']['content']
+            print(f"GROQ raw response: {summary}")
+            formatted_summary = self.clean_and_format_summary(summary)
+            print(f"GROQ formatted summary: {formatted_summary}")
+            return formatted_summary
+        else:
+            print(f"Groq API Error: {response.status_code} - {response.text}")
+        
+    except Exception as e:
+        print(f"Groq API error: {e}")
     
-    def clean_and_format_summary(self, summary_text):
-        """Clean and format the AI-generated summary"""
-        # Remove any intro text and get to the bullet points
-        lines = summary_text.split('\n')
+    return None
+
+def clean_and_format_summary(self, summary_text):
+    """Clean and format the AI-generated summary with better parsing"""
+    if not summary_text:
+        return ""
+    
+    print(f"Cleaning summary: {summary_text}")
+    
+    # Remove common AI response prefixes
+    prefixes_to_remove = [
+        "Here are the key points:",
+        "Here's a summary:",
+        "Executive Summary:",
+        "Summary:",
+        "Key insights:",
+        "Here are 3-4 bullet points:",
+        "Based on the article:"
+    ]
+    
+    cleaned_text = summary_text
+    for prefix in prefixes_to_remove:
+        if cleaned_text.lower().startswith(prefix.lower()):
+            cleaned_text = cleaned_text[len(prefix):].strip()
+    
+    # Split into lines and find bullet points
+    lines = cleaned_text.split('\n')
+    bullets = []
+    
+    for line in lines:
+        line = line.strip()
+        
+        # Skip empty lines
+        if not line:
+            continue
+            
+        # Look for various bullet formats
+        bullet_patterns = ['•', '-', '*', '▪', '○']
+        is_bullet = any(line.startswith(pattern) for pattern in bullet_patterns)
+        is_numbered = any(line.startswith(f"{i}.") for i in range(1, 10))
+        
+        if is_bullet or is_numbered:
+            # Clean up the bullet point
+            clean_line = line
+            for pattern in bullet_patterns + [f"{i}." for i in range(1, 10)]:
+                if clean_line.startswith(pattern):
+                    clean_line = clean_line[len(pattern):].strip()
+                    break
+            
+            # Only include substantial bullet points
+            if len(clean_line) > 20:
+                bullets.append(f"• {clean_line}")
+        elif len(line) > 30 and len(bullets) < 4:
+            # If it's a substantial line without bullet formatting, add it as a bullet
+            bullets.append(f"• {line}")
+    
+    # If we still don't have good bullets, try sentence splitting
+    if len(bullets) < 2:
+        sentences = summary_text.replace('\n', ' ').split('.')
         bullets = []
-        
-        for line in lines:
-            line = line.strip()
-            # Look for bullet points or numbered items
-            if (line.startswith('•') or line.startswith('-') or 
-                line.startswith('*') or any(line.startswith(f"{i}.") for i in range(1, 10))):
-                # Clean up the bullet point
-                clean_line = line.lstrip('•-*0123456789. ').strip()
-                if len(clean_line) > 15:  # Filter out very short items
-                    bullets.append(f"• {clean_line}")
-        
-        # If we don't have proper bullets, try to split into sentences
-        if len(bullets) < 2:
-            sentences = summary_text.replace('\n', ' ').split('.')
-            bullets = []
-            for sentence in sentences[:4]:
-                sentence = sentence.strip()
-                if len(sentence) > 20:
-                    bullets.append(f"• {sentence}")
-        
-        return '\n'.join(bullets[:4])
-    
-    def format_as_bullets(self, text):
-        """Convert summary text to 3-4 bullet points"""
-        sentences = text.split('.')
-        bullets = []
-        
-        for sentence in sentences[:4]:
+        for sentence in sentences:
             sentence = sentence.strip()
-            if len(sentence) > 20:  # Filter out very short fragments
+            if len(sentence) > 25 and len(bullets) < 4:
                 bullets.append(f"• {sentence}")
-        
-        return '\n'.join(bullets[:4])
     
-    def simple_summary(self, content, title):
-        """Fallback summary method"""
-        words = content.split()
-        if len(words) < 50:
-            return f"• {title}\n• Content too short for detailed summary"
+    result = '\n'.join(bullets[:4])
+    print(f"Final formatted result: {result}")
+    return result
+
+def generate_summary_free(self, content, title):
+    """Generate summary using free AI service with better validation"""
+    print(f"Generating summary for: {title}")
+    print(f"Content length: {len(content) if content else 0}")
+    
+    # Better content validation
+    if not content or len(content.strip()) < 50:
+        print("Content too short, using title-based summary")
+        return f"• {title}\n• Article content could not be extracted for detailed analysis"
+    
+    try:
+        # Try Method 1: Groq (fastest, great free tier)
+        summary = self.try_groq_free(content, title)
+        if summary and len(summary.strip()) > 50:
+            return summary
         
-        # Extract first few meaningful sentences
-        sentences = content.split('.')[:3]
-        bullets = [f"• {sentence.strip()}" for sentence in sentences if len(sentence.strip()) > 20]
+        # Try Method 2: OpenAI Free Tier (if available)
+        summary = self.try_openai_free(content, title)
+        if summary and len(summary.strip()) > 50:
+            return summary
         
-        return '\n'.join(bullets[:3])
+        # Try Method 3: Hugging Face Chat Model (supports prompts)
+        summary = self.try_hf_chat_model(content, title)
+        if summary and len(summary.strip()) > 50:
+            return summary
+            
+    except Exception as e:
+        print(f"Error generating summary: {e}")
+    
+    # Fallback: enhanced simple extraction
+    return self.enhanced_simple_summary(content, title)
+
+def enhanced_simple_summary(self, content, title):
+    """Enhanced fallback summary method"""
+    if not content or len(content.split()) < 20:
+        return f"• {title}\n• Content extraction failed - manual review needed"
+    
+    # Try to extract key sentences that contain numbers, companies, or important keywords
+    sentences = content.replace('\n', ' ').split('.')
+    key_sentences = []
+    
+    important_keywords = ['million', 'billion', 'percent', '%', '$', 'funding', 'raised', 'partnership', 'launched', 'announced']
+    
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if (len(sentence) > 30 and 
+            any(keyword.lower() in sentence.lower() for keyword in important_keywords)):
+            key_sentences.append(sentence)
+            if len(key_sentences) >= 3:
+                break
+    
+    # If no key sentences found, use first few sentences
+    if not key_sentences:
+        key_sentences = [s.strip() for s in sentences[:3] if len(s.strip()) > 30]
+    
+    bullets = [f"• {sentence}" for sentence in key_sentences[:3]]
+    
+    if not bullets:
+        return f"• {title}\n• Full article content available but requires manual summary"
+    
+    return '\n'.join(bullets)
     
     def add_to_notion(self, article):
         """Add article to Notion database"""
