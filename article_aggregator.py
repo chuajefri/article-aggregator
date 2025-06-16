@@ -11,13 +11,14 @@ class ArticleAggregator:
         self.sources = {
             'Tech': [
                 'https://techcrunch.com/feed/',
-                'https://www.theverge.com/rss/index.xml',
-                'https://feeds.arstechnica.com/arstechnica/index',
-                'https://rss.cnn.com/rss/edition_technology.rss'
+                'https://openai.com/blog/rss.xml',
+                'https://www.lennysnewsletter.com/feed'
             ],
             'Health': [
                 'https://www.medicalnewstoday.com/feeds/news.xml',
-                'https://feeds.webmd.com/rss/rss.aspx?RSSSource=RSS_PUBLIC'
+                'https://www.mobihealthnews.com/feed/',
+                'https://www.fiercehealthcare.com/rss.xml',
+                'https://medcitynews.com/feed/'
             ]
         }
         # Get tokens from environment variables (GitHub Secrets)
