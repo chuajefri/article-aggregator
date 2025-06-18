@@ -7,54 +7,165 @@ import time
 import os
 import re
 from urllib.parse import urljoin, urlparse
+import random
+from dateutil import parser as date_parser
 
 class ArticleAggregator:
     def __init__(self):
+        # Updated and verified RSS sources
         self.sources = {
             'Tech': [
                 'https://techcrunch.com/feed/',
                 'https://openai.com/blog/rss.xml',
-                'https://www.lennysnewsletter.com/feed'
+                'https://www.lennysnewsletter.com/feed',
+                'https://feeds.feedburner.com/oreilly/radar/atom',  # Additional tech source
+                'https://www.theverge.com/rss/index.xml'
             ],
             'Health': [
                 'https://www.medicalnewstoday.com/feeds/news.xml',
-                'https://www.mobihealthnews.com/feed/',
-                'https://www.fiercehealthcare.com/rss.xml',
-                'https://medcitynews.com/feed/'
+                'https://www.mobihealthnews.com/feed',  # Fixed URL (removed trailing slash)
+                'https://www.fiercehealthcare.com/rss/xml',  # Fixed URL structure
+                'https://medcitynews.com/feed/',
+                'https://www.healthcareitnews.com/rss/all-news',  # Additional health IT source
+                'https://www.modernhealthcare.com/rss/all'  # Additional healthcare source
             ]
         }
+        
         # Get tokens from environment variables (GitHub Secrets)
         self.notion_token = os.getenv('NOTION_TOKEN')
         self.notion_database_id = os.getenv('NOTION_DATABASE_ID')
         self.hf_token = os.getenv('HUGGINGFACE_TOKEN')
+        self.groq_api_key = os.getenv('GROQ_API_KEY')
+        self.openai_api_key = os.getenv('OPENAI_API_KEY')
         
-        # Enhanced headers for better scraping success
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Cache-Control': 'max-age=0'
-        }
+        # Enhanced headers with rotation for better scraping success
+        self.headers_list = [
+            {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Cache-Control': 'max-age=0'
+            },
+            {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/rss+xml, application/xml, text/xml',
+                'Accept-Language': 'en-US,en;q=0.8',
+                'Cache-Control': 'no-cache'
+            },
+            {
+                'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': '*/*',
+                'Accept-Language': 'en-US,en;q=0.5'
+            }
+        ]
+        
+    def get_random_headers(self):
+        """Get random headers to avoid being blocked"""
+        return random.choice(self.headers_list)
+        
+    def validate_rss_url(self, url):
+        """Validate and potentially fix RSS URLs"""
+        print(f"Validating RSS URL: {url}")
+        
+        # Test the URL first
+        try:
+            headers = self.get_random_headers()
+            response = requests.get(url, headers=headers, timeout=15)
+            
+            if response.status_code == 200:
+                # Check if it's actually RSS/XML content
+                content_type = response.headers.get('content-type', '').lower()
+                if any(xml_type in content_type for xml_type in ['xml', 'rss', 'atom']):
+                    print(f"✅ Valid RSS URL: {url}")
+                    return url
+                else:
+                    print(f"⚠️  URL returns content but may not be RSS: {url}")
+                    # Try to parse anyway
+                    feed = feedparser.parse(response.content)
+                    if feed.entries:
+                        print(f"✅ Content is parseable as RSS: {url}")
+                        return url
+            else:
+                print(f"❌ HTTP {response.status_code} for URL: {url}")
+                
+        except Exception as e:
+            print(f"❌ Error validating URL {url}: {e}")
+        
+        # Try common variations if original fails
+        variations = []
+        
+        if url.endswith('/feed/'):
+            variations.append(url[:-1])  # Remove trailing slash
+        elif url.endswith('/feed'):
+            variations.append(url + '/')   # Add trailing slash
+        
+        if 'mobihealthnews.com' in url:
+            variations.extend([
+                'https://www.mobihealthnews.com/rss',
+                'https://www.mobihealthnews.com/feed.xml',
+                'https://feeds.feedburner.com/MobiHealthNews'
+            ])
+        
+        if 'fiercehealthcare.com' in url:
+            variations.extend([
+                'https://www.fiercehealthcare.com/rss.xml',
+                'https://www.fiercehealthcare.com/feed',
+                'https://www.fiercehealthcare.com/rss/all'
+            ])
+        
+        # Test variations
+        for variation in variations:
+            try:
+                print(f"Trying variation: {variation}")
+                headers = self.get_random_headers()
+                response = requests.get(variation, headers=headers, timeout=15)
+                
+                if response.status_code == 200:
+                    feed = feedparser.parse(response.content)
+                    if feed.entries:
+                        print(f"✅ Working variation found: {variation}")
+                        return variation
+                        
+            except Exception as e:
+                print(f"Variation failed {variation}: {e}")
+                continue
+        
+        print(f"❌ No working RSS URL found for: {url}")
+        return None
         
     def fetch_rss_articles(self, url, hours_back=24):
-        """Enhanced RSS fetching with better date parsing and error handling"""
-        try:
-            print(f"Fetching RSS from: {url}")
+        """Enhanced RSS fetching with URL validation and better error handling"""
+        # First validate the URL
+        validated_url = self.validate_rss_url(url)
+        if not validated_url:
+            print(f"Skipping invalid RSS URL: {url}")
+            return []
             
-            # Add headers for RSS requests too
-            response = requests.get(url, headers=self.headers, timeout=30)
+        try:
+            print(f"Fetching RSS from validated URL: {validated_url}")
+            
+            headers = self.get_random_headers()
+            response = requests.get(validated_url, headers=headers, timeout=30)
             response.raise_for_status()
+            
+            # Check if we got redirected
+            if response.url != validated_url:
+                print(f"Redirected to: {response.url}")
             
             feed = feedparser.parse(response.content)
             
-            if not feed.entries:
-                print(f"No entries found in feed: {url}")
+            # Better feed validation
+            if not hasattr(feed, 'entries') or not feed.entries:
+                print(f"No entries found in feed: {validated_url}")
+                print(f"Feed info: {getattr(feed.feed, 'title', 'No title')}")
+                print(f"Bozo: {feed.bozo}")
+                if feed.bozo:
+                    print(f"Bozo exception: {feed.bozo_exception}")
                 return []
                 
             recent_articles = []
@@ -66,85 +177,165 @@ class ArticleAggregator:
             for entry in feed.entries:
                 try:
                     # Enhanced date parsing with multiple fallback methods
-                    pub_date = None
-                    
-                    # Method 1: published_parsed
-                    if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                        pub_date = datetime(*entry.published_parsed[:6])
-                    
-                    # Method 2: updated_parsed
-                    elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
-                        pub_date = datetime(*entry.updated_parsed[:6])
-                    
-                    # Method 3: published string parsing
-                    elif hasattr(entry, 'published'):
-                        try:
-                            from dateutil import parser
-                            pub_date = parser.parse(entry.published)
-                        except:
-                            pass
-                    
-                    # Method 4: Default to current time for recent articles
-                    if not pub_date:
-                        pub_date = datetime.now()
-                        print(f"Warning: Could not parse date for article: {entry.title}")
+                    pub_date = self.parse_entry_date(entry)
                     
                     # Check if article is recent enough
-                    if pub_date > cutoff_time:
+                    if pub_date and pub_date > cutoff_time:
                         # Get description/summary with better fallbacks
-                        description = ""
-                        if hasattr(entry, 'summary'):
-                            description = entry.summary
-                        elif hasattr(entry, 'description'):
-                            description = entry.description
-                        elif hasattr(entry, 'content'):
-                            if isinstance(entry.content, list) and entry.content:
-                                description = entry.content[0].get('value', '')
-                        
-                        # Clean HTML from description
-                        if description:
-                            description = BeautifulSoup(description, 'html.parser').get_text()[:300]
+                        description = self.extract_entry_description(entry)
                         
                         article = {
-                            'title': entry.title,
-                            'url': entry.link,
+                            'title': self.clean_text(entry.title) if hasattr(entry, 'title') else 'Untitled',
+                            'url': entry.link if hasattr(entry, 'link') else '',
                             'published': pub_date.isoformat(),
                             'source': getattr(feed.feed, 'title', 'Unknown Source'),
                             'description': description
                         }
-                        recent_articles.append(article)
-                        print(f"Added recent article: {entry.title}")
+                        
+                        # Validate article has required fields
+                        if article['url'] and article['title']:
+                            recent_articles.append(article)
+                            print(f"Added recent article: {article['title'][:80]}...")
+                        else:
+                            print(f"Skipping article with missing data: {article.get('title', 'No title')}")
                     else:
-                        print(f"Article too old: {entry.title} ({pub_date})")
+                        date_str = pub_date.strftime('%Y-%m-%d %H:%M') if pub_date else 'Unknown date'
+                        print(f"Article too old: {getattr(entry, 'title', 'No title')[:50]}... ({date_str})")
                         
                 except Exception as e:
                     print(f"Error processing entry {getattr(entry, 'title', 'Unknown')}: {e}")
                     continue
             
-            print(f"Found {len(recent_articles)} recent articles from {url}")
+            print(f"Found {len(recent_articles)} recent articles from {validated_url}")
             return recent_articles
             
+        except requests.exceptions.RequestException as e:
+            print(f"Request error fetching RSS from {validated_url}: {e}")
+            return []
         except Exception as e:
-            print(f"Error fetching RSS from {url}: {e}")
+            print(f"Unexpected error fetching RSS from {validated_url}: {e}")
             return []
     
+    def parse_entry_date(self, entry):
+        """Enhanced date parsing for RSS entries"""
+        pub_date = None
+        
+        # Try multiple date fields and parsing methods
+        date_fields = ['published_parsed', 'updated_parsed', 'published', 'updated', 'date']
+        
+        for field in date_fields:
+            try:
+                if hasattr(entry, field):
+                    field_value = getattr(entry, field)
+                    
+                    if field_value:
+                        # Handle parsed time tuples
+                        if field.endswith('_parsed') and isinstance(field_value, (tuple, list)):
+                            if len(field_value) >= 6:
+                                pub_date = datetime(*field_value[:6])
+                                break
+                        
+                        # Handle string dates
+                        elif isinstance(field_value, str):
+                            try:
+                                pub_date = date_parser.parse(field_value)
+                                break
+                            except:
+                                # Try manual parsing for common formats
+                                for fmt in ['%Y-%m-%dT%H:%M:%S%z', '%Y-%m-%d %H:%M:%S', '%a, %d %b %Y %H:%M:%S %Z']:
+                                    try:
+                                        pub_date = datetime.strptime(field_value, fmt)
+                                        break
+                                    except:
+                                        continue
+                                if pub_date:
+                                    break
+                        
+            except Exception as e:
+                print(f"Error parsing date field {field}: {e}")
+                continue
+        
+        # Default to current time if no date found
+        if not pub_date:
+            pub_date = datetime.now()
+            print(f"Warning: Could not parse date for article, using current time")
+        
+        return pub_date
+    
+    def extract_entry_description(self, entry):
+        """Extract description from RSS entry with multiple fallbacks"""
+        description = ""
+        
+        # Try different description fields
+        desc_fields = ['summary', 'description', 'content', 'subtitle']
+        
+        for field in desc_fields:
+            try:
+                if hasattr(entry, field):
+                    field_value = getattr(entry, field)
+                    
+                    if isinstance(field_value, str):
+                        description = field_value
+                        break
+                    elif isinstance(field_value, list) and field_value:
+                        # Handle content arrays
+                        if isinstance(field_value[0], dict):
+                            description = field_value[0].get('value', str(field_value[0]))
+                        else:
+                            description = str(field_value[0])
+                        break
+                    elif field_value:
+                        description = str(field_value)
+                        break
+                        
+            except Exception as e:
+                print(f"Error extracting description from field {field}: {e}")
+                continue
+        
+        # Clean HTML from description
+        if description:
+            description = BeautifulSoup(description, 'html.parser').get_text()
+            description = self.clean_text(description)[:500]  # Limit length
+        
+        return description
+    
+    def clean_text(self, text):
+        """Clean and normalize text"""
+        if not text:
+            return ""
+        
+        # Remove excessive whitespace
+        text = re.sub(r'\s+', ' ', text.strip())
+        
+        # Remove common artifacts
+        text = re.sub(r'\[…\]|\[...\]|…', '', text)
+        text = re.sub(r'^\s*-\s*', '', text)  # Remove leading dashes
+        
+        return text
+    
     def scrape_article_content(self, url):
-        """Enhanced content extraction with more robust selectors and fallbacks"""
+        """Enhanced content extraction with improved selectors and error handling"""
         try:
             print(f"Scraping content from: {url}")
+            
+            # Skip problematic URLs
+            if not url or not url.startswith('http'):
+                print(f"Invalid URL: {url}")
+                return ""
             
             # Add retry logic for failed requests
             max_retries = 3
             for attempt in range(max_retries):
                 try:
-                    response = requests.get(url, timeout=30, headers=self.headers)
+                    headers = self.get_random_headers()
+                    response = requests.get(url, timeout=30, headers=headers)
                     response.raise_for_status()
                     break
                 except requests.exceptions.RequestException as e:
                     print(f"Attempt {attempt + 1} failed for {url}: {e}")
                     if attempt == max_retries - 1:
                         raise
-                    time.sleep(2)
+                    time.sleep(random.uniform(2, 5))  # Random delay between retries
             
             soup = BeautifulSoup(response.content, 'html.parser')
             
@@ -161,16 +352,17 @@ class ArticleAggregator:
                 '.wp-block-separator', '.wp-block-spacer', '.social-links',
                 '.newsletter-signup', '.cta', '.call-to-action', '.widget',
                 '.recommended', '.trending', '.popular', '.most-read',
-                '[data-module="Advertisement"]', '.sticky-ad', '.inline-ad'
+                '[data-module="Advertisement"]', '.sticky-ad', '.inline-ad',
+                '.mobile-ad', '.desktop-ad', '.banner-ad', '.display-ad'
             ]
             
             for selector in unwanted_selectors:
                 for element in soup.select(selector):
                     element.decompose()
             
-            # Comprehensive content selectors for different sites
+            # Site-specific content selectors (ordered by specificity)
             content_selectors = [
-                # TechCrunch specific (2024/2025 structure)
+                # TechCrunch specific
                 '.wp-block-post-content',
                 '.entry-content',
                 '.article-content',
@@ -185,14 +377,21 @@ class ArticleAggregator:
                 '.article-body-content',
                 '.node-content',
                 '.field-item',
+                '.fierce-content',
                 
                 # Medical News Today specific
                 '.css-1p8ayus',
                 '.article-body',
+                '.content-body',
                 
                 # MobiHealthNews specific
                 '.entry-content',
                 '.post-content',
+                '.article-content',
+                
+                # Healthcare IT News specific
+                '.node-body',
+                '.field-name-body',
                 
                 # General selectors (ordered by specificity)
                 'article .content',
@@ -225,7 +424,7 @@ class ArticleAggregator:
                         content_element = max(elements, key=lambda x: len(x.get_text().strip()))
                         raw_content = content_element.get_text()
                         
-                        if len(raw_content.strip()) > 200:  # Lowered threshold for better success
+                        if len(raw_content.strip()) > 200:
                             content = raw_content
                             used_selector = selector
                             print(f"Content found using selector: {selector} (length: {len(content)})")
@@ -234,41 +433,14 @@ class ArticleAggregator:
                     print(f"Error with selector {selector}: {e}")
                     continue
             
-            # Enhanced paragraph fallback with site-specific improvements
+            # Enhanced paragraph fallback
             if not content or len(content.strip()) < 200:
                 print("Trying enhanced paragraph extraction...")
-                
-                # Try different paragraph selection strategies
-                paragraph_strategies = [
-                    'article p',
-                    '.post-content p',
-                    '.entry-content p', 
-                    '.article-content p',
-                    '.wp-block-post-content p',
-                    '.field-name-body p',  # Fierce Healthcare
-                    '.article-body p',
-                    'main p',
-                    '.content p',
-                    'p'  # Last resort
-                ]
-                
-                for strategy in paragraph_strategies:
-                    try:
-                        paragraphs = soup.select(strategy)
-                        if paragraphs and len(paragraphs) >= 3:  # Need at least 3 paragraphs
-                            valid_paragraphs = self.filter_paragraphs(paragraphs)
-                            if len(valid_paragraphs) >= 2:  # At least 2 valid paragraphs
-                                content = '\n\n'.join(valid_paragraphs)
-                                print(f"Content found using paragraph strategy: {strategy} (length: {len(content)})")
-                                break
-                    except Exception as e:
-                        print(f"Error with paragraph strategy {strategy}: {e}")
-                        continue
+                content = self.extract_paragraphs(soup)
             
-            # If still no content, try extracting all text and filtering
+            # Final fallback: full text extraction with filtering
             if not content or len(content.strip()) < 100:
                 print("Trying full text extraction with filtering...")
-                # Remove remaining unwanted elements by text content
                 all_text = soup.get_text()
                 if len(all_text.strip()) > 500:
                     content = self.clean_extracted_content(all_text)
@@ -282,7 +454,7 @@ class ArticleAggregator:
             clean_content = self.clean_extracted_content(content)
             
             # Return substantial content for AI processing
-            final_content = clean_content[:10000] if clean_content else ""
+            final_content = clean_content[:15000] if clean_content else ""  # Increased limit
             print(f"Final content length for {url}: {len(final_content)}")
             
             return final_content
@@ -294,8 +466,39 @@ class ArticleAggregator:
             print(f"Unexpected error scraping {url}: {e}")
             return ""
 
+    def extract_paragraphs(self, soup):
+        """Enhanced paragraph extraction with site-specific improvements"""
+        paragraph_strategies = [
+            'article p',
+            '.post-content p',
+            '.entry-content p', 
+            '.article-content p',
+            '.wp-block-post-content p',
+            '.field-name-body p',  # Fierce Healthcare
+            '.article-body p',
+            '.content-body p',
+            'main p',
+            '.content p',
+            'p'  # Last resort
+        ]
+        
+        for strategy in paragraph_strategies:
+            try:
+                paragraphs = soup.select(strategy)
+                if paragraphs and len(paragraphs) >= 2:  # Need at least 2 paragraphs
+                    valid_paragraphs = self.filter_paragraphs(paragraphs)
+                    if len(valid_paragraphs) >= 2:
+                        content = '\n\n'.join(valid_paragraphs)
+                        print(f"Content found using paragraph strategy: {strategy} (length: {len(content)})")
+                        return content
+            except Exception as e:
+                print(f"Error with paragraph strategy {strategy}: {e}")
+                continue
+        
+        return ""
+
     def filter_paragraphs(self, paragraphs):
-        """Enhanced paragraph filtering with better content detection"""
+        """Enhanced paragraph filtering"""
         valid_paragraphs = []
         
         skip_phrases = [
@@ -307,33 +510,35 @@ class ArticleAggregator:
             'all rights reserved', 'privacy policy', 'terms of service',
             'cookie policy', 'contact us', 'about us', 'related articles',
             'you might also like', 'recommended for you', 'trending now',
-            'most popular', 'editor picks', 'latest news'
+            'most popular', 'editor picks', 'latest news', 'sign up',
+            'click here', 'learn more', 'find out more'
         ]
         
         for p in paragraphs:
             p_text = p.get_text().strip()
             
             # Enhanced filtering criteria
-            if (len(p_text) > 30 and  # Reduced minimum length
-                len(p_text.split()) > 8 and  # At least 8 words
+            if (len(p_text) > 25 and
+                len(p_text.split()) > 6 and
                 not any(skip in p_text.lower() for skip in skip_phrases) and
-                not p_text.lower().startswith(('image:', 'photo:', 'video:', 'advertisement')) and
+                not p_text.lower().startswith(('image:', 'photo:', 'video:', 'advertisement', 'share', 'follow')) and
                 not re.match(r'^\d+\s*(min|hour|day|week|month|year)', p_text.lower()) and
                 not re.match(r'^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)', p_text.lower()) and
                 '©' not in p_text and
                 not p_text.isdigit() and
-                not re.match(r'^[\d\s\-/]+$', p_text)):  # Avoid date-only strings
+                not re.match(r'^[\d\s\-/:.]+$', p_text) and
+                not p_text.count('|') > 3):  # Avoid navigation menus
                 
                 valid_paragraphs.append(p_text)
         
         return valid_paragraphs
 
     def clean_extracted_content(self, content):
-        """Enhanced content cleaning with better pattern matching"""
+        """Enhanced content cleaning"""
         if not content:
             return ""
         
-        # First pass: Remove obvious navigation and metadata
+        # Split into lines and filter
         lines = []
         skip_patterns = [
             'menu', 'search', 'subscribe', 'newsletter', 'follow us', 
@@ -344,80 +549,73 @@ class ArticleAggregator:
             'techcrunch event', 'all stage pass', 'privacy policy',
             'terms of service', 'cookie policy', 'all rights reserved',
             'related articles', 'you might also like', 'recommended',
-            'trending', 'most popular', 'latest news', 'editor picks'
+            'trending', 'most popular', 'latest news', 'editor picks',
+            'click here', 'learn more', 'find out more', 'read full'
         ]
         
         for line in content.splitlines():
             line = line.strip()
-            if (len(line) > 20 and  # Reduced minimum length
-                len(line.split()) > 5 and  # At least 5 words
+            if (len(line) > 20 and
+                len(line.split()) > 4 and
                 not line.isdigit() and 
                 '©' not in line and
                 not any(pattern in line.lower() for pattern in skip_patterns) and
                 not re.match(r'^\d+\s*(comments?|shares?|likes?)', line.lower()) and
                 not re.match(r'^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)', line.lower()) and
-                not re.match(r'^[\d\s\-/:.]+$', line)):  # Avoid timestamp/date lines
+                not re.match(r'^[\d\s\-/:.]+$', line) and
+                line.count('|') < 4):  # Avoid navigation
                 lines.append(line)
         
         cleaned_content = '\n'.join(lines)
         
-        # Second pass: Remove duplicate lines and excessive whitespace
+        # Remove duplicate lines
         unique_lines = []
         seen_lines = set()
         
         for line in cleaned_content.splitlines():
             line = line.strip()
-            if line and line not in seen_lines and len(line) > 20:
+            if line and line not in seen_lines and len(line) > 15:
                 unique_lines.append(line)
                 seen_lines.add(line)
         
         return '\n'.join(unique_lines)
 
     def try_groq_free(self, content, title):
-        """Enhanced Groq API with better error handling and content validation"""
+        """Enhanced Groq API with better prompting"""
         try:
-            groq_key = os.getenv('GROQ_API_KEY')
-            if not groq_key:
+            if not self.groq_api_key:
                 print("No GROQ API key found")
                 return None
             
-            if not content or len(content.strip()) < 100:  # Lowered threshold
+            if not content or len(content.strip()) < 100:
                 print(f"Content too short for GROQ processing: {len(content) if content else 0} characters")
                 return None
             
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {
-                "Authorization": f"Bearer {groq_key}",
+                "Authorization": f"Bearer {self.groq_api_key}",
                 "Content-Type": "application/json"
             }
             
-            # Enhanced system prompt for better summaries
-            system_prompt = """You are a business intelligence analyst specializing in healthcare and technology. Create executive summaries that capture the most important business insights and developments.
+            # Enhanced system prompt
+            system_prompt = """You are a business intelligence analyst. Create concise executive summaries that capture key business developments, financial metrics, and strategic implications.
+
+REQUIREMENTS:
+- Create exactly 3-4 bullet points
+- Each point: 15-40 words
+- Start with the most important element (company, amount, development)
+- Include specific numbers, percentages, dates when available
+- Focus on actionable business intelligence
+- Use clear, professional language
 
 FOCUS ON:
-- Funding amounts, revenue figures, and financial metrics
-- Strategic partnerships, acquisitions, and business deals
-- Market trends, growth rates, and competitive positioning
-- Regulatory developments, FDA approvals, and policy changes
-- Product launches, technology innovations, and clinical trial results
-- Company performance, leadership changes, and strategic pivots
+- Funding rounds, revenue, financial metrics
+- Partnerships, acquisitions, strategic deals
+- Product launches, clinical trials, regulatory approvals
+- Market trends, competitive positioning
+- Leadership changes, company pivots"""
 
-FORMAT REQUIREMENTS:
-- Create exactly 3-4 bullet points
-- Each bullet point should be 20-50 words
-- Start with the most important element (company name, dollar amount, or key development)
-- Use complete, clear sentences
-- Include specific numbers, percentages, and metrics when available
-- Focus on actionable business intelligence
-
-STYLE:
-- Professional and concise
-- Include company names and key figures
-- Quantify impact where possible
-- Avoid marketing language or fluff"""
-
-            # Strategic content selection (take more content for better context)
-            content_preview = content[:8000]  # Increased limit
+            content_preview = content[:10000]
             
             payload = {
                 "model": "mixtral-8x7b-32768",
@@ -425,51 +623,34 @@ STYLE:
                     {"role": "system", "content": system_prompt},
                     {
                         "role": "user", 
-                        "content": f"""Analyze this article and create a 3-4 point executive summary focusing on key business developments, financial metrics, and strategic implications:
-
-TITLE: {title}
-
-CONTENT:
-{content_preview}
-
-Create 3-4 bullet points highlighting the most important business insights and developments:"""
+                        "content": f"Create 3-4 executive summary points for:\n\nTITLE: {title}\n\nCONTENT:\n{content_preview}"
                     }
                 ],
-                "max_tokens": 600,  # Increased token limit
+                "max_tokens": 400,
                 "temperature": 0.1,
-                "top_p": 0.9,
-                "stop": None
+                "top_p": 0.9
             }
             
-            # Add retry logic for API calls
-            max_retries = 2
-            for attempt in range(max_retries):
+            # Retry logic
+            for attempt in range(2):
                 try:
                     response = requests.post(url, headers=headers, json=payload, timeout=60)
                     
                     if response.status_code == 200:
                         result = response.json()
                         summary = result['choices'][0]['message']['content']
-                        print(f"GROQ raw response: {summary}")
                         formatted_summary = self.format_ai_summary(summary)
-                        print(f"GROQ formatted summary: {formatted_summary}")
                         
                         if formatted_summary and len(formatted_summary.strip()) > 50:
+                            print(f"✅ GROQ summary generated successfully")
                             return formatted_summary
-                        else:
-                            print("GROQ summary too short, trying fallback")
-                            return None
                     else:
                         print(f"Groq API Error: {response.status_code} - {response.text}")
-                        if attempt == max_retries - 1:
-                            return None
-                        time.sleep(5)  # Wait before retry
                         
                 except Exception as e:
                     print(f"Groq API request error (attempt {attempt + 1}): {e}")
-                    if attempt == max_retries - 1:
-                        return None
-                    time.sleep(5)
+                    if attempt == 0:
+                        time.sleep(3)
             
         except Exception as e:
             print(f"Groq API error: {e}")
@@ -477,25 +658,16 @@ Create 3-4 bullet points highlighting the most important business insights and d
         return None
 
     def format_ai_summary(self, summary_text):
-        """Improved summary formatting with better validation"""
+        """Improved summary formatting"""
         if not summary_text:
             return ""
         
-        print(f"Formatting summary: {summary_text[:200]}...")
-        
-        # Remove common AI response prefixes and suffixes
+        # Remove common prefixes
         prefixes_to_remove = [
-            "Here are the key points:",
-            "Here's a summary:",
-            "Executive Summary:",
-            "Summary:",
-            "Key insights:",
-            "Here are 3-4 bullet points:",
-            "Based on the article:",
-            "Here are the key business insights:",
-            "Key business developments:",
-            "Main points:",
-            "Important highlights:"
+            "Here are the key points:", "Here's a summary:", "Executive Summary:",
+            "Summary:", "Key insights:", "Here are 3-4 bullet points:",
+            "Based on the article:", "Here are the key business insights:",
+            "Key business developments:", "Main points:", "Important highlights:"
         ]
         
         cleaned_text = summary_text.strip()
@@ -503,7 +675,7 @@ Create 3-4 bullet points highlighting the most important business insights and d
             if cleaned_text.lower().startswith(prefix.lower()):
                 cleaned_text = cleaned_text[len(prefix):].strip()
         
-        # Split by lines and process bullets
+        # Process lines into bullets
         lines = [line.strip() for line in cleaned_text.split('\n') if line.strip()]
         bullets = []
         
@@ -511,91 +683,37 @@ Create 3-4 bullet points highlighting the most important business insights and d
             if not line:
                 continue
             
-            # Check for existing bullet formatting
-            bullet_patterns = ['•', '-', '*', '▪', '○', '·']
-            numbered_patterns = [f"{i}." for i in range(1, 10)]
+            # Clean existing bullet formatting
+            bullet_patterns = ['•', '-', '*', '▪', '○', '·'] + [f"{i}." for i in range(1, 10)]
+            clean_line = line
             
-            is_bullet = any(line.startswith(pattern + ' ') for pattern in bullet_patterns)
-            is_numbered = any(line.startswith(pattern + ' ') for pattern in numbered_patterns)
+            for pattern in bullet_patterns:
+                if clean_line.startswith(pattern + ' '):
+                    clean_line = clean_line[len(pattern):].strip()
+                    break
             
-            if is_bullet or is_numbered:
-                # Clean existing formatting
-                clean_line = line
-                for pattern in bullet_patterns + numbered_patterns:
-                    if clean_line.startswith(pattern + ' '):
-                        clean_line = clean_line[len(pattern):].strip()
-                        break
-                
-                # Validate content quality
-                if (len(clean_line) > 25 and 
-                    len(clean_line.split()) >= 6 and
-                    not clean_line.endswith('...') and
-                    not clean_line.endswith(',') and
-                    '.' in clean_line):  # Should have at least one sentence
-                    bullets.append(f"• {clean_line}")
-                    
-            elif (len(line) > 30 and 
-                  len(line.split()) >= 8 and 
-                  len(bullets) < 4 and
-                  '.' in line):  # Should be a complete sentence
-                bullets.append(f"• {line}")
+            # Validate content quality
+            words = clean_line.split()
+            if (len(words) >= 5 and len(words) <= 50 and
+                len(clean_line) > 20 and
+                not clean_line.endswith('...') and
+                '.' in clean_line and
+                len(bullets) < 4):
+                bullets.append(f"• {clean_line}")
         
-        # If we don't have enough bullets, try sentence splitting
+        # If no good bullets found, try sentence splitting
         if len(bullets) < 2:
             sentences = re.split(r'(?<=[.!?])\s+', cleaned_text)
             bullets = []
-            for sentence in sentences:
+            for sentence in sentences[:4]:
                 sentence = sentence.strip()
-                if (len(sentence) > 25 and 
-                    len(sentence.split()) >= 8 and 
-                    len(bullets) < 4 and
+                words = sentence.split()
+                if (len(words) >= 5 and len(words) <= 50 and
+                    len(sentence) > 20 and
                     sentence.endswith(('.', '!', '?'))):
-                    # Remove any existing bullet formatting
-                    sentence = re.sub(r'^[•\-*▪○·]\s*', '', sentence)
-                    sentence = re.sub(r'^\d+\.\s*', '', sentence)
                     bullets.append(f"• {sentence}")
         
-        # Final validation
-        validated_bullets = []
-        for bullet in bullets[:4]:
-            text = bullet[2:].strip()  # Remove "• "
-            words = text.split()
-            
-            if (len(words) >= 6 and 
-                len(text) > 20 and
-                len(text) < 300 and
-                text.endswith(('.', '!', '?')) and
-                not text.lower().startswith(('click', 'read more', 'subscribe'))):
-                validated_bullets.append(bullet)
-        
-        result = '\n'.join(validated_bullets)
-        print(f"Final validated bullets: {len(validated_bullets)}")
-        return result
-
-    def try_openai_free(self, content, title):
-        """Try OpenAI API if available"""
-        try:
-            openai_key = os.getenv('OPENAI_API_KEY')
-            if not openai_key:
-                return None
-            
-            # Implementation would go here
-            # For now, return None to use other methods
-            return None
-        except:
-            return None
-
-    def try_hf_chat_model(self, content, title):
-        """Try Hugging Face models if available"""
-        try:
-            if not self.hf_token:
-                return None
-            
-            # Implementation would go here
-            # For now, return None to use other methods
-            return None
-        except:
-            return None
+        return '\n'.join(bullets[:4])
 
     def generate_summary_free(self, content, title):
         """Generate summary using free AI service with enhanced fallbacks"""
